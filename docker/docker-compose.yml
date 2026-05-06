@@ -1,0 +1,100 @@
+services:
+  spark-master:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: spark-master
+    hostname: spark-master
+    user: root
+    entrypoint: /usr/local/spark/bin/spark-class
+    command: org.apache.spark.deploy.master.Master
+    environment:
+      - SPARK_MASTER_HOST=spark-master
+      - SPARK_MASTER_PORT=7077
+      - SPARK_MASTER_WEBUI_PORT=8080
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+    volumes:
+      - ../archive:/home/jovyan/work/archive
+      - ../data_parquet:/home/jovyan/work/data_parquet
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 1G
+
+  spark-worker-1:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: spark-worker-1
+    hostname: spark-worker-1
+    user: root
+    entrypoint: /usr/local/spark/bin/spark-class
+    command: >
+      org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
+    environment:
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_WEBUI_PORT=8081
+    depends_on:
+      - spark-master
+    volumes:
+      - ../archive:/home/jovyan/work/archive
+      - ../data_parquet:/home/jovyan/work/data_parquet
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  spark-worker-2:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: spark-worker-2
+    hostname: spark-worker-2
+    user: root
+    entrypoint: /usr/local/spark/bin/spark-class
+    command: >
+      org.apache.spark.deploy.worker.Worker
+      spark://spark-master:7077
+    environment:
+      - SPARK_WORKER_MEMORY=2g
+      - SPARK_WORKER_CORES=2
+      - SPARK_WORKER_WEBUI_PORT=8082
+    depends_on:
+      - spark-master
+    volumes:
+      - ../archive:/home/jovyan/work/archive
+      - ../data_parquet:/home/jovyan/work/data_parquet
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 2G
+
+  jupyter:
+    image: jupyter/pyspark-notebook:spark-3.5.0
+    container_name: jupyter
+    hostname: jupyter
+    ports:
+      - "8888:8888"
+      - "4040:4040"
+    environment:
+      - JUPYTER_ENABLE_LAB=yes
+      - PYSPARK_PYTHON=python3
+      - SPARK_MASTER=spark://spark-master:7077
+    volumes:
+      - ../archive:/home/jovyan/work/archive
+      - ../data_parquet:/home/jovyan/work/data_parquet
+      - ../notebooks:/home/jovyan/work/notebooks
+    depends_on:
+      - spark-master
+      - spark-worker-1
+      - spark-worker-2
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: 3G
+
+networks:
+  default:
+    name: spark-network
