@@ -1,0 +1,20 @@
+# Dados brutos (muito pesados para versionar)
+archive/
+data_parquet/
+
+# Modelos treinados
+models/
+
+# Arquivos temporários e de sistema
+.DS_Store
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Logs do Spark
+*.log
+derby.log
+metastore_db/
+
+# Scripts temporários de teste
+test_pipeline.py
