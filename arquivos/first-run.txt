@@ -1,0 +1,412 @@
+Projeto Big Data — Crimes em Chicago
+Pipeline: Ingestão → ETL → EDA → Machine Learning com Apache Spark
+Target: Arrest (Classificação Binária — predizer se o crime resultará em prisão)
+
+Parte 1 — Ambiente e Ingestão (CSV → Parquet)
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import col, to_timestamp, hour, dayofweek, month
+from pyspark.sql.types import IntegerType, DoubleType
+from pyspark.ml.feature import StringIndexer, OneHotEncoder, VectorAssembler
+from pyspark.ml.classification import (
+    LogisticRegression,
+    DecisionTreeClassifier,
+    MultilayerPerceptronClassifier
+)
+from pyspark.ml import Pipeline
+from pyspark.ml.evaluation import MulticlassClassificationEvaluator
+# Conecta ao cluster Spark (Master + 2 Workers via Docker)
+spark = SparkSession.builder \
+    .appName("CrimesChicago_BigData") \
+    .master("spark://spark-master:7077") \
+    .config("spark.driver.host", "jupyter") \
+    .config("spark.driver.bindAddress", "0.0.0.0") \
+    .config("spark.driver.memory", "2g") \
+    .config("spark.executor.memory", "2g") \
+    .config("spark.sql.shuffle.partitions", "50") \
+    .getOrCreate()
+
+spark.sparkContext.setLogLevel("WARN")
+print(f"Spark version: {spark.version}")
+print(f"Master: {spark.sparkContext.master}")
+Spark version: 3.5.0
+Master: spark://spark-master:7077
+1.1 Leitura dos CSVs do Data Lake Local
+# Lê todos os CSVs da pasta /archive (suporta arquivo único ou particionado)
+df_raw = spark.read.csv(
+    "/home/jovyan/work/archive/",
+    header=True,
+    inferSchema=True
+)
+
+print(f"Total de linhas: {df_raw.count():,}")
+print(f"Total de colunas: {len(df_raw.columns)}")
+df_raw.printSchema()
+Total de linhas: 7,941,286
+Total de colunas: 23
+root
+ |-- _c0: integer (nullable = true)
+ |-- ID: integer (nullable = true)
+ |-- Case Number: string (nullable = true)
+ |-- Date: string (nullable = true)
+ |-- Block: string (nullable = true)
+ |-- IUCR: string (nullable = true)
+ |-- Primary Type: string (nullable = true)
+ |-- Description: string (nullable = true)
+ |-- Location Description: string (nullable = true)
+ |-- Arrest: string (nullable = true)
+ |-- Domestic: string (nullable = true)
+ |-- Beat: string (nullable = true)
+ |-- District: string (nullable = true)
+ |-- Ward: string (nullable = true)
+ |-- Community Area: string (nullable = true)
+ |-- FBI Code: string (nullable = true)
+ |-- X Coordinate: string (nullable = true)
+ |-- Y Coordinate: string (nullable = true)
+ |-- Year: string (nullable = true)
+ |-- Updated On: string (nullable = true)
+ |-- Latitude: string (nullable = true)
+ |-- Longitude: string (nullable = true)
+ |-- Location: string (nullable = true)
+
+df_raw.show(5)
++----+----+-----------+--------------------+-------------------+----+------------+-------------------+--------------------+------+--------+----+--------+----+--------------+--------+------------+------------+----+--------------------+------------+-------------+--------------------+
+| _c0|  ID|Case Number|                Date|              Block|IUCR|Primary Type|        Description|Location Description|Arrest|Domestic|Beat|District|Ward|Community Area|FBI Code|X Coordinate|Y Coordinate|Year|          Updated On|    Latitude|    Longitude|            Location|
++----+----+-----------+--------------------+-------------------+----+------------+-------------------+--------------------+------+--------+----+--------+----+--------------+--------+------------+------------+----+--------------------+------------+-------------+--------------------+
+| 388|4785|   HP610824|10/07/2008 12:39:...|    000XX E 75TH ST|0110|    HOMICIDE|FIRST DEGREE MURDER|               ALLEY|  True|   False| 323|     3.0| 6.0|          69.0|     01A|   1178207.0|   1855308.0|2008|08/17/2015 03:03:...|41.758275857|-87.622451031|(41.758275857, -8...|
+| 835|4786|   HP616595|10/09/2008 03:30:...|    048XX W POLK ST|0110|    HOMICIDE|FIRST DEGREE MURDER|              STREET|  True|   False|1533|    15.0|24.0|          25.0|     01A|   1144200.0|   1895857.0|2008|08/17/2015 03:03:...| 41.87025207|-87.746069362|(41.87025207, -87...|
+|1334|4787|   HP616904|10/09/2008 08:35:...|    030XX W MANN DR|0110|    HOMICIDE|FIRST DEGREE MURDER|       PARK PROPERTY| False|   False| 831|     8.0|18.0|          66.0|     01A|   1157314.0|   1859778.0|2008|08/17/2015 03:03:...|41.770990476|-87.698901469|(41.770990476, -8...|
+|1907|4788|   HP618616|10/10/2008 02:33:...|052XX W CHICAGO AVE|0110|    HOMICIDE|FIRST DEGREE MURDER|          RESTAURANT| False|   False|1524|    15.0|37.0|          25.0|     01A|   1141065.0|   1904824.0|2008|08/17/2015 03:03:...|41.894916924|-87.757358147|(41.894916924, -8...|
+|2436|4789|   HP619020|10/10/2008 12:50:...|  026XX S HOMAN AVE|0110|    HOMICIDE|FIRST DEGREE MURDER|              GARAGE| False|    True|1032|    10.0|22.0|          30.0|     01A|   1154123.0|   1886297.0|2008|08/17/2015 03:03:...|41.843826272|-87.709893465|(41.843826272, -8...|
++----+----+-----------+--------------------+-------------------+----+------------+-------------------+--------------------+------+--------+----+--------+----+--------------+--------+------------+------------+----+--------------------+------------+-------------+--------------------+
+only showing top 5 rows
+
+1.2 Conversão para Parquet (Otimização de Storage)
+Parquet é colunar e binário — reduz I/O significativamente em comparação ao CSV para workloads analíticos.
+
+PARQUET_PATH = "/home/jovyan/work/data_parquet/crimes_raw"
+
+df_raw.write.mode("overwrite").parquet(PARQUET_PATH)
+print(f"Parquet salvo em: {PARQUET_PATH}")
+Parquet salvo em: /home/jovyan/work/data_parquet/crimes_raw
+Parte 2 — EDA e Pré-processamento (ETL)
+2.1 Leitura Otimizada a partir do Parquet
+df = spark.read.parquet(PARQUET_PATH)
+df.printSchema()
+root
+ |-- _c0: integer (nullable = true)
+ |-- ID: integer (nullable = true)
+ |-- Case Number: string (nullable = true)
+ |-- Date: string (nullable = true)
+ |-- Block: string (nullable = true)
+ |-- IUCR: string (nullable = true)
+ |-- Primary Type: string (nullable = true)
+ |-- Description: string (nullable = true)
+ |-- Location Description: string (nullable = true)
+ |-- Arrest: string (nullable = true)
+ |-- Domestic: string (nullable = true)
+ |-- Beat: string (nullable = true)
+ |-- District: string (nullable = true)
+ |-- Ward: string (nullable = true)
+ |-- Community Area: string (nullable = true)
+ |-- FBI Code: string (nullable = true)
+ |-- X Coordinate: string (nullable = true)
+ |-- Y Coordinate: string (nullable = true)
+ |-- Year: string (nullable = true)
+ |-- Updated On: string (nullable = true)
+ |-- Latitude: string (nullable = true)
+ |-- Longitude: string (nullable = true)
+ |-- Location: string (nullable = true)
+
+2.2 Limpeza dos Dados
+# Remove linhas com nulos nas colunas críticas
+df = df.dropna(subset=["Date", "Primary Type", "Location Description",
+                        "Arrest", "Latitude", "Longitude", "District", "Beat"])
+
+# Remove registros com coordenadas inválidas (0,0)
+df = df.filter((col("Latitude") != 0.0) & (col("Longitude") != 0.0))
+
+print(f"Linhas após limpeza: {df.count():,}")
+Linhas após limpeza: 7,834,133
+2.3 Feature Engineering
+Extrai Hour, DayOfWeek e Month do timestamp do crime para aumentar o poder preditivo.
+
+# Parse do timestamp (formato Chicago: "MM/dd/yyyy hh:mm:ss a")
+df = df.withColumn("Date_ts", to_timestamp(col("Date"), "MM/dd/yyyy hh:mm:ss a"))
+
+# Features temporais derivadas
+df = df.withColumn("Hour",      hour("Date_ts"))
+df = df.withColumn("DayOfWeek", dayofweek("Date_ts"))
+df = df.withColumn("Month",     month("Date_ts"))
+
+# Variável alvo: Arrest como inteiro (0/1) — coluna é string "True"/"False", não booleana
+df = df.withColumn("Arrest_label", (col("Arrest") == "True").cast(IntegerType()))
+
+# Domestic como inteiro
+df = df.withColumn("Domestic_int", (col("Domestic") == "True").cast(IntegerType()))
+
+# Tipos numéricos para colunas de área/setor
+df = df.withColumn("District",       col("District").cast(IntegerType()))
+df = df.withColumn("Beat",           col("Beat").cast(IntegerType()))
+df = df.withColumn("Community Area", col("Community Area").cast(IntegerType()))
+
+# Latitude e Longitude precisam ser numéricas para o VectorAssembler
+df = df.withColumn("Latitude",  col("Latitude").cast(DoubleType()))
+df = df.withColumn("Longitude", col("Longitude").cast(DoubleType()))
+# Seleciona apenas as colunas relevantes para o modelo
+FEATURE_COLS = [
+    "Primary Type", "Location Description",
+    "Hour", "DayOfWeek", "Month",
+    "District", "Beat", "Community Area",
+    "Domestic_int", "Latitude", "Longitude"
+]
+TARGET_COL = "Arrest_label"
+
+df = df.select(FEATURE_COLS + [TARGET_COL]).dropna()
+print(f"Dataset final: {df.count():,} linhas | {len(df.columns)} colunas")
+df.show(5)
+Dataset final: 7,145,306 linhas | 12 colunas
++------------+--------------------+----+---------+-----+--------+----+--------------+------------+------------+-------------+------------+
+|Primary Type|Location Description|Hour|DayOfWeek|Month|District|Beat|Community Area|Domestic_int|    Latitude|    Longitude|Arrest_label|
++------------+--------------------+----+---------+-----+--------+----+--------------+------------+------------+-------------+------------+
+|    HOMICIDE|               ALLEY|  12|        3|   10|       3| 323|            69|           0|41.758275857|-87.622451031|           1|
+|    HOMICIDE|              STREET|   3|        5|   10|      15|1533|            25|           0| 41.87025207|-87.746069362|           1|
+|    HOMICIDE|       PARK PROPERTY|   8|        5|   10|       8| 831|            66|           0|41.770990476|-87.698901469|           0|
+|    HOMICIDE|          RESTAURANT|   2|        6|   10|      15|1524|            25|           0|41.894916924|-87.757358147|           0|
+|    HOMICIDE|              GARAGE|  12|        6|   10|      10|1032|            30|           1|41.843826272|-87.709893465|           0|
++------------+--------------------+----+---------+-----+--------+----+--------------+------------+------------+-------------+------------+
+only showing top 5 rows
+
+2.4 Análise Exploratória com Spark SQL
+df.createOrReplaceTempView("crimes")
+# Query 1: Top 10 tipos de crime por volume e taxa de prisão
+spark.sql("""
+    SELECT `Primary Type`,
+           COUNT(*)                                          AS total_crimes,
+           SUM(Arrest_label)                                 AS total_arrests,
+           ROUND(SUM(Arrest_label) / COUNT(*) * 100, 2)     AS arrest_rate_pct
+    FROM crimes
+    GROUP BY `Primary Type`
+    ORDER BY total_crimes DESC
+    LIMIT 10
+""").show(truncate=False)
++-------------------+------------+-------------+---------------+
+|Primary Type       |total_crimes|total_arrests|arrest_rate_pct|
++-------------------+------------+-------------+---------------+
+|THEFT              |1476390     |172606       |11.69          |
+|BATTERY            |1298245     |298521       |22.99          |
+|CRIMINAL DAMAGE    |835316      |58415        |6.99           |
+|NARCOTICS          |796054      |789728       |99.21          |
+|OTHER OFFENSE      |440885      |74728        |16.95          |
+|ASSAULT            |432905      |102917       |23.77          |
+|BURGLARY           |430571      |24545        |5.7            |
+|MOTOR VEHICLE THEFT|328768      |28035        |8.53           |
+|ROBBERY            |271450      |26855        |9.89           |
+|DECEPTIVE PRACTICE |247715      |45350        |18.31          |
++-------------------+------------+-------------+---------------+
+
+# Query 2: Distribuição de crimes e taxa de prisão por hora do dia
+spark.sql("""
+    SELECT Hour,
+           COUNT(*)                             AS total_crimes,
+           ROUND(AVG(Arrest_label) * 100, 2)   AS arrest_rate_pct
+    FROM crimes
+    GROUP BY Hour
+    ORDER BY Hour
+""").show(24)
++----+------------+---------------+
+|Hour|total_crimes|arrest_rate_pct|
++----+------------+---------------+
+|   0|      403228|          20.72|
+|   1|      229719|          27.61|
+|   2|      192507|          26.24|
+|   3|      154958|          24.47|
+|   4|      115499|          22.34|
+|   5|       94796|          18.53|
+|   6|      112191|          19.65|
+|   7|      162555|          18.18|
+|   8|      240473|          18.91|
+|   9|      303084|          19.17|
+|  10|      297721|           27.0|
+|  11|      314678|          34.11|
+|  12|      400676|          28.17|
+|  13|      338553|          32.16|
+|  14|      360388|           29.6|
+|  15|      378631|           27.4|
+|  16|      355230|          27.59|
+|  17|      360625|          25.94|
+|  18|      387114|          28.01|
+|  19|      406217|          34.59|
+|  20|      408911|          35.24|
+|  21|      403222|          35.11|
+|  22|      397418|          32.91|
+|  23|      326912|          32.79|
++----+------------+---------------+
+
+# Query 3: Distritos com maior volume de crimes e menor taxa de prisão (hotspots críticos)
+spark.sql("""
+    SELECT District,
+           COUNT(*)                                         AS total_crimes,
+           ROUND(SUM(Arrest_label) / COUNT(*) * 100, 2)   AS arrest_rate_pct
+    FROM crimes
+    WHERE District IS NOT NULL
+    GROUP BY District
+    HAVING COUNT(*) > 1000
+    ORDER BY arrest_rate_pct ASC
+    LIMIT 10
+""").show()
++--------+------------+---------------+
+|District|total_crimes|arrest_rate_pct|
++--------+------------+---------------+
+|      16|      236834|          19.22|
+|      14|      278375|          22.07|
+|      19|      314362|          22.19|
+|      22|      237994|          22.28|
+|      17|      207422|          23.18|
+|       4|      412844|           24.0|
+|      20|      121718|          24.46|
+|      24|      213411|          24.62|
+|       8|      499754|          24.77|
+|      18|      300508|          25.11|
++--------+------------+---------------+
+
+2.5 Análise de Desbalanceamento da Classe Arrest
+print("Distribuição da classe Arrest:")
+df.groupBy(TARGET_COL).count().orderBy(TARGET_COL).show()
+
+count_arrest    = df.filter(col(TARGET_COL) == 1).count()
+count_no_arrest = df.filter(col(TARGET_COL) == 0).count()
+total           = count_arrest + count_no_arrest
+
+print(f"Arrests (1):    {count_arrest:,}  ({count_arrest/total*100:.1f}%)")
+print(f"No Arrest (0):  {count_no_arrest:,}  ({count_no_arrest/total*100:.1f}%)")
+print(f"Razão de desbalanceamento: 1:{count_no_arrest//count_arrest}")
+Distribuição da classe Arrest:
++------------+-------+
+|Arrest_label|  count|
++------------+-------+
+|           0|5127304|
+|           1|2018002|
++------------+-------+
+
+Arrests (1):    2,018,002  (28.2%)
+No Arrest (0):  5,127,304  (71.8%)
+Razão de desbalanceamento: 1:2
+2.6 Balanceamento — Undersampling da Classe Majoritária
+Reduz a classe Arrest=0 para equilibrar com Arrest=1, evitando viés nos modelos.
+
+# Fração de amostragem para igualar as classes
+fraction = count_arrest / count_no_arrest
+
+df_majority = df.filter(col(TARGET_COL) == 0).sample(fraction=fraction, seed=42)
+df_minority = df.filter(col(TARGET_COL) == 1)
+
+df_balanced = df_majority.union(df_minority)
+
+print(f"Dataset balanceado: {df_balanced.count():,} linhas")
+df_balanced.groupBy(TARGET_COL).count().orderBy(TARGET_COL).show()
+Dataset balanceado: 4,037,330 linhas
++------------+-------+
+|Arrest_label|  count|
++------------+-------+
+|           0|2019328|
+|           1|2018002|
++------------+-------+
+
+Parte 3 — Machine Learning (Pipeline + Avaliação)
+Padrão baseado em aula_06_parte_2.ipynb: Pipeline com StringIndexer → OneHotEncoder → VectorAssembler → Modelo
+
+3.1 Configuração dos Estágios de Feature Engineering
+# Colunas categóricas que precisam de encoding
+CAT_COLS     = ["Primary Type", "Location Description"]
+INDEXED_COLS = [c + "_idx" for c in CAT_COLS]
+ENCODED_COLS = [c + "_enc" for c in CAT_COLS]
+
+# Colunas numéricas prontas para uso
+NUMERIC_COLS = [
+    "Hour", "DayOfWeek", "Month",
+    "District", "Beat", "Community Area",
+    "Domestic_int", "Latitude", "Longitude"
+]
+
+# StringIndexer: transforma string em índice numérico
+indexers = [
+    StringIndexer(inputCol=c, outputCol=idx, handleInvalid="skip")
+    for c, idx in zip(CAT_COLS, INDEXED_COLS)
+]
+
+# OneHotEncoder: transforma índice em vetor binário esparso
+encoder = OneHotEncoder(
+    inputCols=INDEXED_COLS,
+    outputCols=ENCODED_COLS
+)
+
+# VectorAssembler: concatena todas as features em um único vetor
+assembler = VectorAssembler(
+    inputCols=ENCODED_COLS + NUMERIC_COLS,
+    outputCol="features"
+)
+
+# Estágios base compartilhados por todos os modelos
+BASE_STAGES = indexers + [encoder, assembler]
+3.2 Divisão Treino / Teste e Cálculo do Tamanho do Vetor de Features
+train_data, test_data = df_balanced.randomSplit([0.8, 0.2], seed=42)
+print(f"Treino: {train_data.count():,} | Teste: {test_data.count():,}")
+
+# Descobre o tamanho do vetor de features (necessário para configurar o MLP)
+pre_pipeline  = Pipeline(stages=BASE_STAGES)
+pre_model     = pre_pipeline.fit(train_data)
+sample_vector = pre_model.transform(train_data.limit(1))
+INPUT_SIZE    = len(sample_vector.select("features").first()[0])
+
+print(f"Tamanho do vetor de features: {INPUT_SIZE}")
+Treino: 3,230,261 | Teste: 807,069
+Tamanho do vetor de features: 206
+3.3 Função Auxiliar de Avaliação
+def evaluate_model(predictions, label_col=TARGET_COL):
+    """Extrai Accuracy, Precision, Recall e F1-Score via MulticlassClassificationEvaluator."""
+    evaluator = MulticlassClassificationEvaluator(labelCol=label_col)
+    metrics = {}
+    for metric in ["accuracy", "weightedPrecision", "weightedRecall", "f1"]:
+        evaluator.setMetricName(metric)
+        metrics[metric] = round(evaluator.evaluate(predictions), 4)
+    return metrics
+3.4 Modelo 1 — Logistic Regression (Baseline)
+lr = LogisticRegression(
+    labelCol=TARGET_COL,
+    featuresCol="features",
+    maxIter=10
+)
+
+pipeline_lr = Pipeline(stages=BASE_STAGES + [lr])
+model_lr    = pipeline_lr.fit(train_data)
+pred_lr     = model_lr.transform(test_data)
+
+metrics_lr = evaluate_model(pred_lr)
+print("=== Logistic Regression ===")
+for k, v in metrics_lr.items():
+    print(f"  {k}: {v}")
+=== Logistic Regression ===
+  accuracy: 0.7992
+  weightedPrecision: 0.8192
+  weightedRecall: 0.7992
+  f1: 0.7959
+3.5 Modelo 2 — Decision Tree Classifier
+dt = DecisionTreeClassifier(
+    labelCol=TARGET_COL,
+    featuresCol="features",
+    maxDepth=5
+)
+
+pipeline_dt = Pipeline(stages=BASE_STAGES + [dt])
+model_dt    = pipeline_dt.fit(train_data)
+pred_dt     = model_dt.transform(test_data)
+
+metrics_dt = evaluate_model(pred_dt)
+print("=== Decision Tree Classifier ===")
+for k, v in metrics_dt.items():
+    print(f"  {k}: {v}")
+=== Decision Tree Classifier ===
+  accuracy: 0.7677
+  weightedPrecision: 0.8253
+  weightedRecall: 0.7677
+  f1: 0.7568
