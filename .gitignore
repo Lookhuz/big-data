@@ -19,6 +19,8 @@ metastore_db/
 # Scripts temporários de teste
 test_pipeline.py
 
-claude.mdclaude.md
+claude.md
+CLAUDE.md
+.claude/
 aula_06_parte_2.ipynb
 ilovepdf_merged (1).pdf
