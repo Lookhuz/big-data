@@ -532,40 +532,6 @@
 </section>
 
 <section>
-  <h2>O que Gostaríamos de ter Feito</h2>
-  <div class="grid2" style="margin-top:.8em;">
-    <div>
-      <div class="card" style="margin-bottom:.8em;">
-        <h3>Modelos não implementados</h3>
-        <ul>
-          <li><strong>Random Forest e Gradient Boosted Trees</strong>: modelos ensemble que quase sempre superam uma árvore isolada. Descartados por uso intensivo de memória</li>
-          <li><strong>MLP no dataset completo</strong>: com cluster maior ou mini-batch SGD, treinaria nos 3,2M registros</li>
-          <li><strong>Cross-validation com k=5</strong>: estimativas muito mais confiáveis, mas multiplica o tempo por 5</li>
-        </ul>
-      </div>
-      <div class="card">
-        <h3>Análises não realizadas</h3>
-        <ul>
-          <li><strong>Métricas separadas por tipo de crime</strong>: analisar performance isolada por categoria</li>
-          <li><strong>Cross-validation k-fold</strong>: estimativas com variância menor que um único split</li>
-          <li><strong>Tuning de hiperparâmetros (GridSearch)</strong>: explorar profundidade da DT e regularização da LR</li>
-        </ul>
-      </div>
-    </div>
-    <div class="card">
-      <h3>Por que não fizemos?</h3>
-      <p>Cada decisão foi <strong>consciente</strong>, não por falta de conhecimento:</p>
-      <ul>
-        <li><strong>Hardware:</strong> 4 GB de RAM total é o principal limitante. Random Forest esgotaria a memória</li>
-        <li><strong>Tempo:</strong> cada execução leva 20–40 minutos. Com múltiplas execuções para depuração, não havia margem para experimentos adicionais</li>
-        <li><strong>Escopo:</strong> o foco foi construir um pipeline completo e funcional de ponta a ponta</li>
-      </ul>
-      <div class="info" style="margin-top:.6em;">Em AWS EMR ou Databricks, todos esses pontos seriam viáveis com o mesmo código: apenas com mais recursos de hardware.</div>
-    </div>
-  </div>
-</section>
-
-<section>
   <h2>Conclusões</h2>
   <div class="grid2" style="margin-top:.8em;">
     <div>

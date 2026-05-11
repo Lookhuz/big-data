@@ -12,7 +12,7 @@ Pipeline completo com Apache Spark para análise e predição de prisões em cri
 
 ## Dataset
 
-**Fonte:** [Chicago Crime Dataset — Kaggle](https://www.kaggle.com/datasets/chicago/chicago-crime)
+**Fonte:** [Chicago Crime Dataset — Kaggle](https://www.kaggle.com/datasets/currie32/crimes-in-chicago)
 
 | Arquivo | Período | Tamanho |
 |---|---|---|
